@@ -72,6 +72,7 @@ export default class Planes {
   blurryAtlasTexture: THREE.Texture | null = null
   onPlaneClick?: (index: number, photo?: Photo) => void
   photoUrls: string[] = []
+  instanceToPhotoIndex: number[] = []  // Maps instanceId → photoIndex
 
   constructor({ scene, sizes, onPlaneClick }: Props) {
     this.scene = scene
@@ -123,65 +124,117 @@ export default class Planes {
   }
 
   async loadTextureAtlas(urls: string[]) {
+    if (urls.length === 0) {
+      console.warn('[Planes] No URLs to load')
+      return
+    }
+
+    console.log(`[Planes] Loading ${urls.length} images into atlas`)
+
     // Load all images
-    const imagePromises = urls.map(async (path) => {
-      try {
-        const res = await fetch(path, { mode: "cors" })
-        if (!res.ok) throw new Error(`Failed to fetch image: ${path}`)
-        const blob = await res.blob()
-        const bitmap = await createImageBitmap(blob)
-        return bitmap as CanvasImageSource
-      } catch (err) {
-        return await new Promise<CanvasImageSource>((resolve, reject) => {
-          const img = new Image()
+    const imagePromises = urls.map(async (path, index) => {
+      return new Promise<CanvasImageSource | null>((resolve) => {
+        const img = new Image()
+        // Only set crossOrigin for non-blob URLs
+        if (!path.startsWith('blob:')) {
           img.crossOrigin = "anonymous"
-          img.onload = () => resolve(img)
-          img.onerror = (e) => reject(e)
-          img.src = path
-        })
-      }
+        }
+        img.onload = () => {
+          console.log(`[Planes] Loaded image ${index + 1}/${urls.length}: ${img.width}x${img.height}`)
+          resolve(img)
+        }
+        img.onerror = (e) => {
+          console.error(`[Planes] Failed to load image ${index}: ${path}`, e)
+          resolve(null) // Don't reject, just skip failed images
+        }
+        img.src = path
+      })
     })
 
-    const images = await Promise.all(imagePromises)
+    const loadedImages = await Promise.all(imagePromises)
+    const images = loadedImages.filter((img): img is CanvasImageSource => img !== null)
 
-    // Calculate atlas dimensions
-    const atlasWidth = Math.max(
-      ...images.map((img: any) => img.width as number)
-    )
-    let totalHeight = 0
+    if (images.length === 0) {
+      console.error('[Planes] No images loaded successfully')
+      return
+    }
 
-    images.forEach((img: any) => {
-      totalHeight += img.height as number
-    })
+    console.log(`[Planes] Successfully loaded ${images.length}/${urls.length} images`)
+
+    // Use a grid-based atlas to avoid exceeding canvas size limits
+    // Max canvas size in most browsers is 16384px
+    const MAX_ATLAS_SIZE = 8192
+    const THUMB_SIZE = 512  // Thumbnail size for each image in atlas
+
+    // Calculate grid dimensions
+    const cols = Math.ceil(Math.sqrt(images.length))
+    const rows = Math.ceil(images.length / cols)
+
+    const atlasWidth = Math.min(cols * THUMB_SIZE, MAX_ATLAS_SIZE)
+    const atlasHeight = Math.min(rows * THUMB_SIZE, MAX_ATLAS_SIZE)
+
+    console.log(`[Planes] Creating atlas: ${atlasWidth}x${atlasHeight} (${cols}x${rows} grid)`)
 
     // Create canvas
     const canvas = document.createElement("canvas")
     canvas.width = atlasWidth
-    canvas.height = totalHeight
+    canvas.height = atlasHeight
     const ctx = canvas.getContext("2d")!
 
-    // Draw images and calculate UVs
-    let currentY = 0
-    this.imageInfos = images.map((img: any) => {
-      const aspectRatio = (img.width as number) / (img.height as number)
+    // Fill with white background (debugging)
+    ctx.fillStyle = "#ffffff"
+    ctx.fillRect(0, 0, atlasWidth, atlasHeight)
 
-      ctx.drawImage(img as any, 0, currentY)
+    // Draw images in grid and calculate UVs
+    this.imageInfos = images.map((img: any, index) => {
+      const col = index % cols
+      const row = Math.floor(index / cols)
 
-      const info = {
-        width: img.width,
-        height: img.height,
-        aspectRatio,
-        uvs: {
-          xStart: 0,
-          xEnd: (img.width as number) / atlasWidth,
-          yStart: 1 - currentY / totalHeight,
-          yEnd: 1 - (currentY + (img.height as number)) / totalHeight,
-        },
+      const x = col * THUMB_SIZE
+      const y = row * THUMB_SIZE
+
+      // Draw image scaled to fit thumbnail
+      const imgWidth = img.width as number
+      const imgHeight = img.height as number
+      const aspectRatio = imgWidth / imgHeight
+
+      let drawWidth = THUMB_SIZE
+      let drawHeight = THUMB_SIZE
+      let drawX = x
+      let drawY = y
+
+      // Maintain aspect ratio (cover mode)
+      if (aspectRatio > 1) {
+        drawHeight = THUMB_SIZE
+        drawWidth = THUMB_SIZE * aspectRatio
+        drawX = x - (drawWidth - THUMB_SIZE) / 2
+      } else {
+        drawWidth = THUMB_SIZE
+        drawHeight = THUMB_SIZE / aspectRatio
+        drawY = y - (drawHeight - THUMB_SIZE) / 2
       }
 
-      currentY += img.height as number
-      return info
+      ctx.save()
+      ctx.beginPath()
+      ctx.rect(x, y, THUMB_SIZE, THUMB_SIZE)
+      ctx.clip()
+      ctx.drawImage(img as any, drawX, drawY, drawWidth, drawHeight)
+      ctx.restore()
+
+      return {
+        width: imgWidth,
+        height: imgHeight,
+        aspectRatio,
+        uvs: {
+          xStart: x / atlasWidth,
+          xEnd: (x + THUMB_SIZE) / atlasWidth,
+          yStart: 1 - y / atlasHeight,
+          yEnd: 1 - (y + THUMB_SIZE) / atlasHeight,
+        },
+      }
     })
+
+    console.log(`[Planes] Atlas created with ${this.imageInfos.length} images`)
 
     // Create texture
     this.atlasTexture = new THREE.Texture(canvas)
@@ -194,21 +247,25 @@ export default class Planes {
   }
 
   createBlurryAtlas() {
-    if (!this.atlasTexture) return
+    if (!this.atlasTexture || !this.atlasTexture.image) return
 
-    const blurryCanvas = document.createElement("canvas")
-    blurryCanvas.width = this.atlasTexture.image.width
-    blurryCanvas.height = this.atlasTexture.image.height
-    const ctx = blurryCanvas.getContext("2d")!
-    ctx.filter = "blur(100px)"
-    ctx.drawImage(this.atlasTexture.image, 0, 0)
-    this.blurryAtlasTexture = new THREE.Texture(blurryCanvas)
-    this.blurryAtlasTexture.wrapS = THREE.ClampToEdgeWrapping
-    this.blurryAtlasTexture.wrapT = THREE.ClampToEdgeWrapping
-    this.blurryAtlasTexture.minFilter = THREE.LinearFilter
-    this.blurryAtlasTexture.magFilter = THREE.LinearFilter
-    this.blurryAtlasTexture.needsUpdate = true
-    this.material.uniforms.uBlurryAtlas.value = this.blurryAtlasTexture
+    try {
+      const blurryCanvas = document.createElement("canvas")
+      blurryCanvas.width = this.atlasTexture.image.width
+      blurryCanvas.height = this.atlasTexture.image.height
+      const ctx = blurryCanvas.getContext("2d")!
+      ctx.filter = "blur(50px)"  // Reduced blur for smaller atlas
+      ctx.drawImage(this.atlasTexture.image, 0, 0)
+      this.blurryAtlasTexture = new THREE.Texture(blurryCanvas)
+      this.blurryAtlasTexture.wrapS = THREE.ClampToEdgeWrapping
+      this.blurryAtlasTexture.wrapT = THREE.ClampToEdgeWrapping
+      this.blurryAtlasTexture.minFilter = THREE.LinearFilter
+      this.blurryAtlasTexture.magFilter = THREE.LinearFilter
+      this.blurryAtlasTexture.needsUpdate = true
+      this.material.uniforms.uBlurryAtlas.value = this.blurryAtlasTexture
+    } catch (err) {
+      console.error('[Planes] Failed to create blurry atlas:', err)
+    }
   }
 
   createMaterial() {
@@ -251,6 +308,9 @@ export default class Planes {
     const meshSpeed = new Float32Array(this.meshCount)
     const aTextureCoords = new Float32Array(this.meshCount * 4)
 
+    // Reset instance-to-photo mapping
+    this.instanceToPhotoIndex = []
+
     for (let i = 0; i < this.meshCount; i++) {
       initialPosition[i * 3 + 0] =
         (Math.random() - 0.5) * this.shaderParameters.maxX * 2
@@ -261,6 +321,9 @@ export default class Planes {
       meshSpeed[i] = Math.random() * 0.5 + 0.5
 
       const imageIndex = i % this.imageInfos.length
+
+      // Store mapping from instance → photo index
+      this.instanceToPhotoIndex[i] = imageIndex
 
       aTextureCoords[i * 4 + 0] = this.imageInfos[imageIndex].uvs.xStart
       aTextureCoords[i * 4 + 1] = this.imageInfos[imageIndex].uvs.xEnd
@@ -354,6 +417,20 @@ export default class Planes {
 
     this.material.uniforms.uScrollY.value = this.scrollY.current
     this.material.uniforms.uSpeedY.value *= 0.835
+  }
+
+  /**
+   * Get photo index from instance ID
+   */
+  getPhotoIndexFromInstance(instanceId: number): number {
+    return this.instanceToPhotoIndex[instanceId] ?? -1
+  }
+
+  /**
+   * Get total number of unique photos loaded
+   */
+  getPhotoCount(): number {
+    return this.imageInfos.length
   }
 }
 

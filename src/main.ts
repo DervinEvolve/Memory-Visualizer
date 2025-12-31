@@ -32,6 +32,11 @@ class App {
     // Create canvas
     this.canvas = new Canvas()
 
+    // Setup photo click handler
+    this.canvas.onPhotoClick = (photoIndex: number) => {
+      this.handlePhotoClick(photoIndex)
+    }
+
     // Setup UI
     this.setupUploadUI()
     this.setupAlbumUI()
@@ -45,6 +50,53 @@ class App {
 
     // Start render loop
     this.render()
+  }
+
+  /**
+   * Handle click on a photo plane
+   */
+  handlePhotoClick(photoIndex: number) {
+    const photos = getPhotos()
+    const photo = photos[photoIndex]
+
+    if (!photo) {
+      console.warn(`[App] No photo at index ${photoIndex}`)
+      return
+    }
+
+    console.log(`[App] Clicked photo: ${photo.name}, status: ${photo.splatStatus}`)
+
+    if (photo.splatStatus === 'ready' && photo.splatUrl) {
+      // Splat is ready - open viewer
+      this.openSplatViewer(photo.id)
+    } else if (photo.splatStatus === 'processing') {
+      // Already processing - show status
+      this.showStatus(`"${photo.name}" is being converted to 3D...`)
+    } else if (photo.splatStatus === 'pending') {
+      // Not yet processed - trigger generation
+      this.showStatus(`Converting "${photo.name}" to 3D...`)
+      this.generateSplatsForPhotos([photo])
+    } else if (photo.splatStatus === 'failed') {
+      // Failed - retry
+      this.showStatus(`Retrying "${photo.name}"...`)
+      this.generateSplatsForPhotos([photo])
+    }
+  }
+
+  /**
+   * Open the splat viewer for a specific photo
+   */
+  openSplatViewer(photoId: string) {
+    if (!this.canvas.splatViewer) {
+      this.canvas.initSplatViewer()
+    }
+
+    const splatViewer = this.canvas.splatViewer!
+    if (splatViewer.hasSplat(photoId)) {
+      splatViewer.open(photoId)
+    } else {
+      console.warn(`[App] No splat loaded for photo ${photoId}`)
+    }
   }
 
   /**
@@ -95,13 +147,13 @@ class App {
         const urls = getPhotoUrls()
         await this.canvas.planes.reloadPhotos(urls)
 
-        this.showStatus(`Added ${newPhotos.length} photo(s)! Converting to 3D...`)
+        this.showStatus(`Added ${newPhotos.length} photo(s)! Click any photo to view in 3D.`, false)
+        setTimeout(() => this.hideStatus(), 3000)
 
         // Update album UI
         this.updateAlbumSelector()
 
-        // Generate splats
-        this.generateSplatsForPhotos(newPhotos)
+        // Don't auto-generate splats - only generate when user clicks a photo
 
         photoInput.value = ""
       } catch (err) {

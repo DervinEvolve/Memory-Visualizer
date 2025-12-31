@@ -14,7 +14,7 @@ export default class Canvas {
   dimensions: Dimensions
   time: number
   clock: THREE.Clock
-  raycaster: THREE.Raycaster
+  raycaster: THREE.Raycaster = new THREE.Raycaster()
   mouse: THREE.Vector2 = new THREE.Vector2()
   orbitControls: OrbitControls
   debug: GUI
@@ -22,6 +22,9 @@ export default class Canvas {
   splatViewer: SplatViewer | null = null
   material: THREE.ShaderMaterial
   viewMode: 'photos' | 'splats' = 'photos'
+  onPhotoClick?: (photoIndex: number) => void
+  isDragging: boolean = false
+  dragStartPos: { x: number; y: number } = { x: 0, y: 0 }
 
   constructor() {
     this.element = document.getElementById("webgl") as HTMLCanvasElement
@@ -79,13 +82,7 @@ export default class Canvas {
   initSplatViewer() {
     if (this.splatViewer) return
 
-    this.splatViewer = new SplatViewer({
-      scene: this.scene,
-      renderer: this.renderer,
-      camera: this.camera,
-      sizes: this.sizes,
-    })
-
+    this.splatViewer = new SplatViewer()
     console.log('[Canvas] Splat viewer initialized')
   }
 
@@ -184,6 +181,48 @@ export default class Canvas {
   addEventListeners() {
     window.addEventListener("mousemove", this.onMouseMove.bind(this))
     window.addEventListener("resize", this.onResize.bind(this))
+
+    // Click detection (distinguish from drag)
+    this.element.addEventListener("pointerdown", this.onPointerDown.bind(this))
+    this.element.addEventListener("pointerup", this.onPointerUp.bind(this))
+  }
+
+  onPointerDown(event: PointerEvent) {
+    this.isDragging = false
+    this.dragStartPos = { x: event.clientX, y: event.clientY }
+  }
+
+  onPointerUp(event: PointerEvent) {
+    // Only treat as click if pointer didn't move much (not a drag)
+    const dx = event.clientX - this.dragStartPos.x
+    const dy = event.clientY - this.dragStartPos.y
+    const distance = Math.sqrt(dx * dx + dy * dy)
+
+    if (distance < 10) {
+      this.onClick(event)
+    }
+  }
+
+  onClick(event: PointerEvent) {
+    // Update mouse coordinates for raycaster
+    this.mouse.x = (event.clientX / window.innerWidth) * 2 - 1
+    this.mouse.y = -(event.clientY / window.innerHeight) * 2 + 1
+
+    // Raycast
+    this.raycaster.setFromCamera(this.mouse, this.camera)
+    const intersects = this.raycaster.intersectObject(this.planes.mesh)
+
+    if (intersects.length > 0) {
+      const instanceId = intersects[0].instanceId
+      if (instanceId !== undefined) {
+        const photoIndex = this.planes.getPhotoIndexFromInstance(instanceId)
+        console.log(`[Canvas] Clicked photo index: ${photoIndex}`)
+
+        if (this.onPhotoClick && photoIndex >= 0) {
+          this.onPhotoClick(photoIndex)
+        }
+      }
+    }
   }
 
   onResize() {

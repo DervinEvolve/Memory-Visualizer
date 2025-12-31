@@ -46,6 +46,8 @@ declare module '@mkkellogg/gaussian-splats-3d' {
     cameraUp?: [number, number, number]
     initialCameraPosition?: [number, number, number]
     initialCameraLookAt?: [number, number, number]
+    rootElement?: HTMLElement | null
+    threeScene?: THREE.Scene
   }
 
   export interface SplatSceneOptions {
