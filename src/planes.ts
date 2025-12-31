@@ -73,6 +73,9 @@ export default class Planes {
   onPlaneClick?: (index: number, photo?: Photo) => void
   photoUrls: string[] = []
   instanceToPhotoIndex: number[] = []  // Maps instanceId → photoIndex
+  // Store initial positions and speeds for raycasting
+  initialPositions: Float32Array = new Float32Array(0)
+  meshSpeeds: Float32Array = new Float32Array(0)
 
   constructor({ scene, sizes, onPlaneClick }: Props) {
     this.scene = scene
@@ -93,9 +96,9 @@ export default class Planes {
   }
 
   createGeometry() {
-    // Square geometry for photos (instead of phone-shaped for Spotify)
+    // Square geometry for photos
     this.geometry = new THREE.PlaneGeometry(1, 1, 1, 1)
-    this.geometry.scale(2, 2, 2)
+    this.geometry.scale(7, 7, 7)  // 3.5x bigger than before
   }
 
   async loadPhotos() {
@@ -331,6 +334,10 @@ export default class Planes {
       aTextureCoords[i * 4 + 3] = this.imageInfos[imageIndex].uvs.yEnd
     }
 
+    // Store for CPU-side position calculation (for raycasting)
+    this.initialPositions = initialPosition
+    this.meshSpeeds = meshSpeed
+
     this.geometry.setAttribute(
       "aInitialPosition",
       new THREE.InstancedBufferAttribute(initialPosition, 3)
@@ -417,6 +424,9 @@ export default class Planes {
 
     this.material.uniforms.uScrollY.value = this.scrollY.current
     this.material.uniforms.uSpeedY.value *= 0.835
+
+    // Update instance matrices for raycasting
+    this.updateInstanceMatrices()
   }
 
   /**
@@ -431,6 +441,58 @@ export default class Planes {
    */
   getPhotoCount(): number {
     return this.imageInfos.length
+  }
+
+  /**
+   * Update instance matrices to match shader positions (for raycasting)
+   */
+  updateInstanceMatrices() {
+    if (this.initialPositions.length === 0) return
+
+    const time = this.material.uniforms.uTime.value
+    const maxX = this.shaderParameters.maxX
+    const maxY = this.shaderParameters.maxY
+    const dragX = this.drag.xCurrent
+    const dragY = this.drag.yCurrent
+    const scrollY = this.scrollY.current
+
+    const matrix = new THREE.Matrix4()
+    const position = new THREE.Vector3()
+
+    const maxZ = 12
+    const minZ = -30
+
+    for (let i = 0; i < this.meshCount; i++) {
+      const initX = this.initialPositions[i * 3 + 0]
+      const initY = this.initialPositions[i * 3 + 1]
+      const initZ = this.initialPositions[i * 3 + 2]
+      const speed = this.meshSpeeds[i]
+
+      // Replicate shader position calculations
+      const maxYoffset = Math.abs(initY - maxY)
+      const minYoffset = Math.abs(initY - (-maxY))
+      const maxXoffset = Math.abs(initX - maxX)
+      const minXoffset = Math.abs(initX - (-maxX))
+
+      // Modulo wrapping (matching shader)
+      const xDisplacement = ((minXoffset - dragX + time * speed) % (maxXoffset + minXoffset) + (maxXoffset + minXoffset)) % (maxXoffset + minXoffset) - minXoffset
+      const yDisplacement = ((minYoffset - dragY) % (maxYoffset + minYoffset) + (maxYoffset + minYoffset)) % (maxYoffset + minYoffset) - minYoffset
+
+      const maxZoffset = Math.abs(initZ - maxZ)
+      const minZoffset = Math.abs(initZ - minZ)
+      const zDisplacement = ((scrollY + minZoffset) % (maxZoffset + minZoffset) + (maxZoffset + minZoffset)) % (maxZoffset + minZoffset) - minZoffset
+
+      position.set(
+        initX + xDisplacement,
+        initY + yDisplacement,
+        initZ + zDisplacement
+      )
+
+      matrix.makeTranslation(position.x, position.y, position.z)
+      this.mesh.setMatrixAt(i, matrix)
+    }
+
+    this.mesh.instanceMatrix.needsUpdate = true
   }
 }
 

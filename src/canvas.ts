@@ -182,25 +182,40 @@ export default class Canvas {
     window.addEventListener("mousemove", this.onMouseMove.bind(this))
     window.addEventListener("resize", this.onResize.bind(this))
 
-    // Click detection (distinguish from drag)
-    this.element.addEventListener("pointerdown", this.onPointerDown.bind(this))
-    this.element.addEventListener("pointerup", this.onPointerUp.bind(this))
+    // Click detection (distinguish from drag) - use window to avoid pointer capture issues
+    window.addEventListener("pointerdown", this.onPointerDown.bind(this))
+    window.addEventListener("pointerup", this.onPointerUp.bind(this))
   }
 
   onPointerDown(event: PointerEvent) {
+    // Ignore clicks on UI elements
+    const target = event.target as HTMLElement
+    if (target.closest('.ui-overlay') || target.closest('button') || target.closest('input')) {
+      return
+    }
     this.isDragging = false
     this.dragStartPos = { x: event.clientX, y: event.clientY }
   }
 
   onPointerUp(event: PointerEvent) {
+    // Ignore if we didn't track a pointerdown (e.g., click started on UI)
+    if (this.dragStartPos.x === 0 && this.dragStartPos.y === 0) {
+      return
+    }
+
     // Only treat as click if pointer didn't move much (not a drag)
     const dx = event.clientX - this.dragStartPos.x
     const dy = event.clientY - this.dragStartPos.y
     const distance = Math.sqrt(dx * dx + dy * dy)
 
+    console.log(`[Canvas] PointerUp - drag distance: ${distance.toFixed(1)}px`)
+
     if (distance < 10) {
       this.onClick(event)
     }
+
+    // Reset
+    this.dragStartPos = { x: 0, y: 0 }
   }
 
   onClick(event: PointerEvent) {
@@ -208,12 +223,17 @@ export default class Canvas {
     this.mouse.x = (event.clientX / window.innerWidth) * 2 - 1
     this.mouse.y = -(event.clientY / window.innerHeight) * 2 + 1
 
+    console.log(`[Canvas] Click at mouse: ${this.mouse.x.toFixed(2)}, ${this.mouse.y.toFixed(2)}`)
+
     // Raycast
     this.raycaster.setFromCamera(this.mouse, this.camera)
-    const intersects = this.raycaster.intersectObject(this.planes.mesh)
+    const intersects = this.raycaster.intersectObject(this.planes.mesh, false)
+
+    console.log(`[Canvas] Raycast found ${intersects.length} intersections`)
 
     if (intersects.length > 0) {
       const instanceId = intersects[0].instanceId
+      console.log(`[Canvas] Hit instanceId: ${instanceId}`)
       if (instanceId !== undefined) {
         const photoIndex = this.planes.getPhotoIndexFromInstance(instanceId)
         console.log(`[Canvas] Clicked photo index: ${photoIndex}`)
