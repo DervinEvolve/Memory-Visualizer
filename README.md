@@ -1,5 +1,7 @@
 # Memory Splat Visualiser
 
+![Memory Splat Visualiser](screenshot.png)
+
 A web app that transforms your photos into 3D Gaussian splats. Upload your images and explore them as floating cards in 3D space - click any photo to view it as an interactive 3D splat.
 
 ## Features
