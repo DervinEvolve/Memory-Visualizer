@@ -19,13 +19,7 @@ A web app that transforms your photos into 3D Gaussian splats. Upload your image
 4. Click any photo to generate and view its 3D Gaussian splat
 5. Navigate between splats with arrow keys or on-screen buttons
 
-## Tech Stack
 
-- **Three.js** - 3D rendering and instanced mesh for photo cards
-- **@mkkellogg/gaussian-splats-3d** - Gaussian splat visualization
-- **Sharp API + Modal** - GPU-accelerated image-to-splat conversion
-- **IndexedDB** - Local storage for photos and albums
-- **Vite + TypeScript** - Build tooling
 
 ## Development
 
